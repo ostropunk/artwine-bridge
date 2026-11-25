@@ -56,16 +56,19 @@ Restart the Arturia app.
 ## Usage
 
 ```
-artwine-bridge [--prefix DIR] status | install | uninstall | check | auto on|off | devices
+artwine-bridge [--prefix DIR] [--no-auto] status | install | uninstall | check | auto [on|off] | devices
 ```
 
 - `status` lists every libusb DLL in the prefix: `original`, `bridged`, `outdated` or `broken`.
 - `install` bridges them. The originals are kept next to them as `libusb.dll.orig`, and running it again is safe.
+  On systems with systemd it also turns on `auto` (see below), unless you pass `--no-auto` or have run `auto off`.
 - `uninstall` puts the originals back.
 - `check` lists libusb functions an app uses that the bridge doesn't export yet.
   Run it after app updates: an app that gets a missing function may crash instead of reporting an error.
-- `auto on` adds a systemd user path unit that re-runs `install` when an app
-  update replaces a bridged DLL. Arturia's installers do this on every update.
+- `auto` watches the bridged DLLs with a systemd user path unit and re-runs `install` when an app
+  update replaces one. Arturia's installers do this on every update. It's on by default.
+  `auto off` turns it off and is remembered, so later installs leave it off; `auto on` turns it back on,
+  and `auto` alone shows the current setting. `uninstall` removes the units.
 - `devices` shows Arturia USB devices and whether your user can open them.
 
 The default prefix is `$WINEPREFIX`, or `~/.wine` if that isn't set.

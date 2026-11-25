@@ -2,6 +2,8 @@ post_install() {
   udevadm control --reload 2>/dev/null || true
   echo ">> Replug your Arturia device, then run (as your user):"
   echo ">>   artwine-bridge devices && artwine-bridge install"
+  echo ">> install also re-bridges automatically after app updates (systemd);"
+  echo ">> use 'artwine-bridge auto off' or '--no-auto' to opt out."
 }
 
 post_upgrade() {

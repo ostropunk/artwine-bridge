@@ -19,11 +19,13 @@ commands:
   uninstall     restore the original DLLs
   check         list libusb functions apps use that the bridge does not export
   auto on|off   reinstall automatically when an app update replaces a bridged DLL
+                (on by default with systemd; 'auto off' is remembered)
   devices       show USB devices from known vendors and whether you can open them
 
 options:
   --prefix DIR  Wine prefix (default: \$WINEPREFIX or ~/.wine)
   -q, --quiet   only print changes and errors
+  --no-auto     install without setting up automatic reinstall
 
 Set ARTWINE_LOG=/path/to/file before starting an app to log its USB calls.
 EOF
@@ -31,11 +33,13 @@ EOF
 
 PREFIX=${WINEPREFIX:-$HOME/.wine}
 QUIET=0
+AUTO=1
 while [ $# -gt 0 ]; do
     case $1 in
         --prefix) PREFIX=$2; shift 2 ;;
         --prefix=*) PREFIX=${1#*=}; shift ;;
         -q|--quiet) QUIET=1; shift ;;
+        --no-auto) AUTO=0; shift ;;
         -h|--help) usage; exit 0 ;;
         -V|--version) echo "$VERSION"; exit 0 ;;
         *) break ;;
@@ -117,11 +121,16 @@ cmd_install() {
         changed=1
     done < <(find_dlls)
     [ $changed = 1 ] && say "restart the apps that use these DLLs"
+    if [ $AUTO = 1 ] && have_systemd && [ ! -e "$(auto_marker)" ]; then
+        auto_enable
+    fi
     return 0
 }
 
 cmd_uninstall() {
     local f d
+    # Stop watching first, or restoring the originals would trigger a reinstall.
+    have_systemd && auto_disable
     while IFS= read -r -d '' f; do
         is_bridge "$f" || continue
         d=$(dirname "$f")
@@ -163,44 +172,75 @@ cmd_check() {
 }
 
 unit_name() { echo "artwine-bridge-$(echo -n "$PREFIX" | md5sum | cut -c1-8)"; }
+unit_dir() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"; }
+auto_marker() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/artwine-bridge/no-auto-$(unit_name)"; }
+have_systemd() { command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; }
 
-cmd_auto() {
-    local dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user" u f
-    u=$(unit_name)
-    case ${1:-} in
-        on)
-            local exe
-            exe=$(readlink -f "$0")
-            mkdir -p "$dir"
-            {
-                echo "[Unit]"
-                echo "Description=Artwine Bridge: re-bridge libusb.dll in $PREFIX after app updates"
-                echo
-                echo "[Path]"
-                while IFS= read -r -d '' f; do echo "PathChanged=$f"; done < <(find_dlls)
-                echo
-                echo "[Install]"
-                echo "WantedBy=default.target"
-            } > "$dir/$u.path"
-            cat > "$dir/$u.service" <<EOF
-[Unit]
+# Write the path and service units; reload systemd only when they changed.
+auto_enable() {
+    local dir u f exe path service changed=0
+    dir=$(unit_dir); u=$(unit_name); exe=$(readlink -f "$0")
+    path=$(
+        echo "[Unit]"
+        echo "Description=Artwine Bridge: re-bridge libusb.dll in $PREFIX after app updates"
+        echo
+        echo "[Path]"
+        while IFS= read -r -d '' f; do echo "PathChanged=$f"; done < <(find_dlls)
+        echo
+        echo "[Install]"
+        echo "WantedBy=default.target"
+    )
+    service="[Unit]
 Description=Artwine Bridge: re-bridge libusb.dll in $PREFIX
 
 [Service]
 Type=oneshot
-ExecStart="$exe" --prefix "$PREFIX" --quiet install
-EOF
-            systemctl --user daemon-reload
-            systemctl --user enable --now "$u.path"
-            echo "auto reinstall on for $PREFIX ($u.path)"
+ExecStart=\"$exe\" --prefix \"$PREFIX\" --quiet install"
+    mkdir -p "$dir"
+    [ "$(cat "$dir/$u.path" 2>/dev/null)" = "$path" ] || { echo "$path" > "$dir/$u.path"; changed=1; }
+    [ "$(cat "$dir/$u.service" 2>/dev/null)" = "$service" ] || { echo "$service" > "$dir/$u.service"; changed=1; }
+    if [ $changed = 1 ]; then
+        systemctl --user daemon-reload
+        systemctl --user enable "$u.path" >/dev/null 2>&1
+        # --no-block: this may run from the service the path unit started.
+        systemctl --user --no-block restart "$u.path"
+        say "auto reinstall on   ($u.path; turn off with: $ME auto off)"
+    elif ! systemctl --user is-active -q "$u.path"; then
+        systemctl --user enable --now "$u.path" >/dev/null 2>&1
+        say "auto reinstall on   ($u.path)"
+    fi
+}
+
+auto_disable() {
+    local dir u
+    dir=$(unit_dir); u=$(unit_name)
+    [ -e "$dir/$u.path" ] || [ -e "$dir/$u.service" ] || return 0
+    systemctl --user disable --now "$u.path" >/dev/null 2>&1 || true
+    rm -f "$dir/$u.path" "$dir/$u.service"
+    systemctl --user daemon-reload
+}
+
+cmd_auto() {
+    have_systemd || die "auto needs a systemd user session"
+    case ${1:-} in
+        on)
+            rm -f "$(auto_marker)"
+            QUIET=1 auto_enable
+            echo "auto reinstall on for $PREFIX ($(unit_name).path)"
             ;;
         off)
-            systemctl --user disable --now "$u.path" 2>/dev/null || true
-            rm -f "$dir/$u.path" "$dir/$u.service"
-            systemctl --user daemon-reload
-            echo "auto reinstall off for $PREFIX"
+            auto_disable
+            mkdir -p "$(dirname "$(auto_marker)")" && touch "$(auto_marker)"
+            echo "auto reinstall off for $PREFIX (install won't turn it back on; use: $ME auto on)"
             ;;
-        *) die "usage: $ME auto on|off" ;;
+        "")
+            if systemctl --user is-active -q "$(unit_name).path"; then
+                echo "auto reinstall on for $PREFIX"
+            else
+                echo "auto reinstall off for $PREFIX"
+            fi
+            ;;
+        *) die "usage: $ME auto [on|off]" ;;
     esac
 }
 
