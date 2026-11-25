@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later
+ * Copyright (C) 2026 ostropunk and Artwine Bridge contributors */
 /* Windows-side test: load libusb.dll by path like Arturia does, find the MiniFreak. */
 #include <windows.h>
 #include <stdio.h>

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later
+ * Copyright (C) 2026 ostropunk and Artwine Bridge contributors */
 /* PE half: a drop-in libusb.dll that forwards to the Unix half (artwine.so),
  * which must sit in the same directory as this DLL. */
 #include <windows.h>

@@ -12,6 +12,9 @@ finds the hardware.
 Artwine Bridge replaces that `libusb.dll` with one that forwards each call to
 the Linux libusb already on your system. The software synth and firmware on the hardware synth is unchanged, but the bridge lets them talk to each other.
 
+> **Unofficial and unsupported.** Use it at your own risk. Artwine Bridge isn't affiliated with or
+> endorsed by Arturia, Wine or anyone else. See [Disclaimer](#disclaimer).
+
 ```
 MiniFreak V.exe ──► libusb.dll (Artwine, Windows side)
                         │  Wine unix call
@@ -126,6 +129,38 @@ pointers pass through unchanged. Only Windows' 32-bit `timeval` and `long` are
 converted. Hotplug callbacks are queued on the Linux side and run on the
 app's own thread the next time it handles libusb events.
 
+## Disclaimer
+
+Artwine Bridge is unofficial, unsupported software, provided as is, without warranty of any kind.
+It's unlikely to damage your hardware or your computer, but it could harm either or both: it talks
+directly to USB devices and replaces files inside your Wine prefix. You install and use it at your
+own risk. The author takes no responsibility for any damage or loss it may cause.
+
+Artwine Bridge isn't affiliated with, supported or endorsed by Arturia, the Wine project, libusb,
+yabridge, vstbridge or any other third party, and the author doesn't endorse or represent any of
+them. Arturia, MiniFreak, MiniFreak V, BeatStep Pro, REAPER and other product names are trademarks
+of their owners, used here only to say what the software works with. The author claims no rights to
+them or to any third party's copyrighted work.
+
+Don't take problems to Arturia's support while the bridge is installed. Run
+`artwine-bridge uninstall` first and check whether the problem is still there.
+
+## Acknowledgements
+
+- [libusb](https://libusb.info), which does the real USB work on the Linux side and which Arturia's apps already use.
+- [Wine](https://www.winehq.org), whose unix-library interface makes the bridge possible.
+- [yabridge](https://github.com/robbert-vdh/yabridge) by Robbert van der Helm and its fork
+  [vstbridge](https://github.com/rations/vstbridge), which run Windows plugins in Linux DAWs.
+- Arturia, for the MiniFreak and MiniFreak V. (Thanks only, not an affiliation.)
+
 ## License
 
-LGPL-2.1-or-later, like libusb and Wine. Not affiliated with Arturia.
+Artwine Bridge's own code is LGPL-2.1-or-later (see `LICENSE`), like libusb and Wine.
+
+- The repository holds no Arturia code, files or firmware. The bridge changes files in your own Wine
+  prefix only, and keeps the originals.
+- The `libusb.dll` it replaces is the stock open-source libusb (1.0.30) that Arturia ships under
+  LGPL-2.1-or-later. That license explicitly lets users replace the library with a compatible one.
+- The built `libusb.dll` includes Wine's `winecrt0` startup code (LGPL-2.1-or-later) and the
+  MinGW-w64 runtime (permissive licenses). If you distribute built binaries, offer the source with
+  them, as the LGPL requires.

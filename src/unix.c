@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later
+ * Copyright (C) 2026 ostropunk and Artwine Bridge contributors */
 /* Artwine Bridge, Unix half: runs inside the Wine process and calls the system libusb-1.0. */
 #include <libusb.h>
 #include <pthread.h>

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (C) 2026 ostropunk and Artwine Bridge contributors
 # Artwine Bridge: swap the libusb.dll that Windows apps ship for one that
 # forwards to Linux libusb, so they can reach USB hardware under Wine.
 set -euo pipefail

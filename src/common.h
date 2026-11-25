@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later
+ * Copyright (C) 2026 ostropunk and Artwine Bridge contributors */
 /* Shared between the PE half (libusb.dll) and the Unix half (artwine.so).
  * Both sides are x86_64 in one address space, so pointers pass through as-is. */
 #ifndef BRIDGE_COMMON_H
