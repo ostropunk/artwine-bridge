@@ -25,7 +25,7 @@ MiniFreak V.exe ──► libusb.dll (Artwine, Windows side)
 | --- | --- |
 | MiniFreak V 5.1.1 standalone ↔ MiniFreak firmware 5.0 | **Sync works** |
 | Arturia Software Center 2.13 agent | Loads, sees devices |
-| MiniFreak V VST/VST3 through yabridge | Should work, not tested yet (see below) |
+| MiniFreak V VST3 through yabridge 5.1.1 (REAPER) | Bridge works: the plugin opens the MiniFreak inside yabridge's host. Link untested: the plugin window ignores mouse clicks (yabridge regression with Wine 9.22 and newer, see below) |
 | MIDI Control Center (BeatStep Pro and other controllers) | **Not bridgeable**: libusb is built into the program, and it finds devices through Windows device APIs that Wine doesn't fill in |
 | Firmware update (DFU) | **Untested.** Don't flash firmware through the bridge yet |
 
@@ -79,6 +79,10 @@ bridging the prefix yabridge uses should be enough. Run
 
 Only one process can hold the synth's sync interface at a time. Close the
 standalone app before you open the plugin, as you would on Windows.
+
+Known issue: with yabridge 5.1.1 on Wine 9.22 or newer, plugin windows draw but
+don't respond to the mouse ([yabridge#432](https://github.com/robbert-vdh/yabridge/issues/432)).
+This isn't caused by Artwine Bridge. Until it's fixed, use the standalone app to link and sync.
 
 ## Troubleshooting
 
