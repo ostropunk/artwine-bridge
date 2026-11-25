@@ -25,7 +25,8 @@ MiniFreak V.exe ──► libusb.dll (Artwine, Windows side)
 | --- | --- |
 | MiniFreak V 5.1.1 standalone ↔ MiniFreak firmware 5.0 | **Sync works** |
 | Arturia Software Center 2.13 agent | Loads, sees devices |
-| MiniFreak V VST3 through yabridge 5.1.1 (REAPER) | Bridge works: the plugin opens the MiniFreak inside yabridge's host. Link untested: the plugin window ignores mouse clicks (yabridge regression with Wine 9.22 and newer, see below) |
+| MiniFreak V VST3 in REAPER through [vstbridge](https://github.com/rations/vstbridge) 0.0.5 | **Sync works** |
+| MiniFreak V VST3 through yabridge 5.1.1 | The bridge works, but the plugin window ignores mouse clicks on Wine 9.22 and newer (see below) |
 | MIDI Control Center (BeatStep Pro and other controllers) | **Not bridgeable**: libusb is built into the program, and it finds devices through Windows device APIs that Wine doesn't fill in |
 | Firmware update (DFU) | **Untested.** Don't flash firmware through the bridge yet |
 
@@ -69,7 +70,7 @@ artwine-bridge [--prefix DIR] status | install | uninstall | check | auto on|off
 
 The default prefix is `$WINEPREFIX`, or `~/.wine` if that isn't set.
 
-## yabridge
+## yabridge and vstbridge
 
 [yabridge](https://github.com/robbert-vdh/yabridge) runs Windows VST plugins in
 Linux DAWs. The MiniFreak V plugin loads the same
@@ -82,7 +83,10 @@ standalone app before you open the plugin, as you would on Windows.
 
 Known issue: with yabridge 5.1.1 on Wine 9.22 or newer, plugin windows draw but
 don't respond to the mouse ([yabridge#432](https://github.com/robbert-vdh/yabridge/issues/432)).
-This isn't caused by Artwine Bridge. Until it's fixed, use the standalone app to link and sync.
+This isn't caused by Artwine Bridge. [vstbridge](https://github.com/rations/vstbridge), a yabridge
+fork, fixes it, and MiniFreak V links and syncs from inside REAPER with vstbridge 0.0.5 built from
+source. REAPER lists each VST3 filename once, so don't keep yabridge's and vstbridge's copies of
+the same plugin in `~/.vst3` at the same time.
 
 ## Troubleshooting
 
@@ -91,6 +95,10 @@ Log every USB call an app makes:
 ```sh
 ARTWINE_LOG=/tmp/artwine.log wine "C:\Program Files\Arturia\MiniFreak V\MiniFreak V.exe"
 ```
+
+Only log while debugging. A linked MiniFreak makes about 1,000 USB calls a second, and logging each
+one slows the app enough to notice: for example, the first on-screen key press after a preset change
+gets lost.
 
 - `open ... LIBUSB_ERROR_ACCESS`: the udev rule isn't active. Run `artwine-bridge devices`, then replug.
 - App crashes on start after an update: run `artwine-bridge check` and open an issue with its output.
