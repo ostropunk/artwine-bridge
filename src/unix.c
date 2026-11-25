@@ -334,6 +334,118 @@ static NTSTATUS f_get_max_alt_packet_size(struct bridge_args *args)
     return 0;
 }
 
+/* ---- async transfers ----
+ * The app owns a Windows-side libusb_transfer (W). Each W gets a native twin (N)
+ * whose callback only queues it; the PE side copies results back and runs W's
+ * callback on the app's thread. Layouts are identical on both sides. */
+static pthread_mutex_t xfer_lock = PTHREAD_MUTEX_INITIALIZER;
+struct xfer_done { struct xfer_done *next; struct libusb_transfer *n; };
+static struct xfer_done *xd_head, *xd_tail;
+
+static void LIBUSB_CALL xfer_native_cb(struct libusb_transfer *n)
+{
+    struct xfer_done *d = malloc(sizeof(*d));
+    if (!d) return; /* W never completes; nothing safer to do */
+    d->next = NULL;
+    d->n = n;
+    pthread_mutex_lock(&xfer_lock);
+    if (xd_tail) xd_tail->next = d; else xd_head = d;
+    xd_tail = d;
+    pthread_mutex_unlock(&xfer_lock);
+}
+/* a[0]=iso packets; ret = native transfer */
+static NTSTATUS f_xfer_alloc(struct bridge_args *args)
+{
+    args->ret = (int64_t)(uintptr_t)libusb_alloc_transfer(I(0));
+    return 0;
+}
+static NTSTATUS f_xfer_free(struct bridge_args *args) { libusb_free_transfer(P(0)); return 0; }
+/* a[0]=N, a[1]=W */
+static NTSTATUS f_xfer_submit(struct bridge_args *args)
+{
+    struct libusb_transfer *n = P(0), *w = P(1);
+    n->dev_handle = w->dev_handle;
+    /* buffer/transfer freeing is done by the PE side after the app's callback */
+    n->flags = w->flags & ~(LIBUSB_TRANSFER_FREE_BUFFER | LIBUSB_TRANSFER_FREE_TRANSFER);
+    n->endpoint = w->endpoint;
+    n->type = w->type;
+    n->timeout = w->timeout;
+    n->length = w->length;
+    n->buffer = w->buffer;
+    n->num_iso_packets = w->num_iso_packets;
+    for (int i = 0; i < w->num_iso_packets; i++) n->iso_packet_desc[i].length = w->iso_packet_desc[i].length;
+    n->callback = xfer_native_cb;
+    n->user_data = w;
+    args->ret = libusb_submit_transfer(n);
+    blog("submit_transfer type=%d ep=%02x len=%d -> %lld", w->type, w->endpoint, w->length, (long long)args->ret);
+    return 0;
+}
+static NTSTATUS f_xfer_cancel(struct bridge_args *args)
+{
+    args->ret = libusb_cancel_transfer(P(0));
+    blog("cancel_transfer -> %lld", (long long)args->ret);
+    return 0;
+}
+/* Pop one completed transfer, copy its results into W; ret = W or 0. */
+static NTSTATUS f_xfer_pop(struct bridge_args *args)
+{
+    pthread_mutex_lock(&xfer_lock);
+    struct xfer_done *d = xd_head;
+    if (d) { xd_head = d->next; if (!xd_head) xd_tail = NULL; }
+    pthread_mutex_unlock(&xfer_lock);
+    args->ret = 0;
+    if (!d) return 0;
+    struct libusb_transfer *n = d->n, *w = n->user_data;
+    free(d);
+    w->status = n->status;
+    w->actual_length = n->actual_length;
+    for (int i = 0; i < n->num_iso_packets; i++) {
+        w->iso_packet_desc[i].actual_length = n->iso_packet_desc[i].actual_length;
+        w->iso_packet_desc[i].status = n->iso_packet_desc[i].status;
+    }
+    blog("transfer done ep=%02x status=%d actual=%d", n->endpoint, n->status, n->actual_length);
+    args->ret = (int64_t)(uintptr_t)w;
+    return 0;
+}
+
+/* ---- event loop pieces, passed straight through ---- */
+static void tv_in(struct bridge_args *args, int i, struct timeval *tv)
+{
+    tv->tv_sec = (time_t)(int64_t)args->a[i];
+    tv->tv_usec = (suseconds_t)(int64_t)args->a[i + 1];
+}
+/* a[1]=out sec*, a[2]=out usec* (Windows longs) */
+static NTSTATUS f_get_next_timeout(struct bridge_args *args)
+{
+    struct timeval tv = { 0, 0 };
+    args->ret = libusb_get_next_timeout(P(0), &tv);
+    *(int32_t *)P(1) = (int32_t)tv.tv_sec;
+    *(int32_t *)P(2) = (int32_t)tv.tv_usec;
+    return 0;
+}
+static NTSTATUS f_event_handler_active(struct bridge_args *args) { args->ret = libusb_event_handler_active(P(0)); return 0; }
+static NTSTATUS f_event_handling_ok(struct bridge_args *args) { args->ret = libusb_event_handling_ok(P(0)); return 0; }
+static NTSTATUS f_try_lock_events(struct bridge_args *args) { args->ret = libusb_try_lock_events(P(0)); return 0; }
+static NTSTATUS f_lock_events(struct bridge_args *args) { libusb_lock_events(P(0)); return 0; }
+static NTSTATUS f_unlock_events(struct bridge_args *args) { libusb_unlock_events(P(0)); return 0; }
+static NTSTATUS f_lock_event_waiters(struct bridge_args *args) { libusb_lock_event_waiters(P(0)); return 0; }
+static NTSTATUS f_unlock_event_waiters(struct bridge_args *args) { libusb_unlock_event_waiters(P(0)); return 0; }
+static NTSTATUS f_wait_for_event(struct bridge_args *args)
+{
+    struct timeval tv;
+    tv_in(args, 1, &tv);
+    args->ret = libusb_wait_for_event(P(0), args->a[3] ? &tv : NULL);
+    return 0;
+}
+static NTSTATUS f_handle_events_locked(struct bridge_args *args)
+{
+    struct timeval tv;
+    tv_in(args, 1, &tv);
+    args->ret = libusb_handle_events_locked(P(0), &tv);
+    return 0;
+}
+static NTSTATUS f_interrupt_event_handler(struct bridge_args *args) { libusb_interrupt_event_handler(P(0)); return 0; }
+
 __attribute__((visibility("default"))) const unixlib_entry_t __wine_unix_call_funcs[F_COUNT] = {
     [F_init_context] = (unixlib_entry_t)f_init_context,
     [F_exit] = (unixlib_entry_t)f_exit,
@@ -387,4 +499,20 @@ __attribute__((visibility("default"))) const unixlib_entry_t __wine_unix_call_fu
     [F_get_config_descriptor_by_value] = (unixlib_entry_t)f_get_config_descriptor_by_value,
     [F_get_max_iso_packet_size] = (unixlib_entry_t)f_get_max_iso_packet_size,
     [F_get_max_alt_packet_size] = (unixlib_entry_t)f_get_max_alt_packet_size,
+    [F_xfer_alloc] = (unixlib_entry_t)f_xfer_alloc,
+    [F_xfer_free] = (unixlib_entry_t)f_xfer_free,
+    [F_xfer_submit] = (unixlib_entry_t)f_xfer_submit,
+    [F_xfer_cancel] = (unixlib_entry_t)f_xfer_cancel,
+    [F_xfer_pop] = (unixlib_entry_t)f_xfer_pop,
+    [F_get_next_timeout] = (unixlib_entry_t)f_get_next_timeout,
+    [F_event_handler_active] = (unixlib_entry_t)f_event_handler_active,
+    [F_event_handling_ok] = (unixlib_entry_t)f_event_handling_ok,
+    [F_try_lock_events] = (unixlib_entry_t)f_try_lock_events,
+    [F_lock_events] = (unixlib_entry_t)f_lock_events,
+    [F_unlock_events] = (unixlib_entry_t)f_unlock_events,
+    [F_lock_event_waiters] = (unixlib_entry_t)f_lock_event_waiters,
+    [F_unlock_event_waiters] = (unixlib_entry_t)f_unlock_event_waiters,
+    [F_wait_for_event] = (unixlib_entry_t)f_wait_for_event,
+    [F_handle_events_locked] = (unixlib_entry_t)f_handle_events_locked,
+    [F_interrupt_event_handler] = (unixlib_entry_t)f_interrupt_event_handler,
 };

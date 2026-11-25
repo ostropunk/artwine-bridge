@@ -63,6 +63,22 @@ enum bridge_func {
     F_get_config_descriptor_by_value,
     F_get_max_iso_packet_size,
     F_get_max_alt_packet_size,
+    F_xfer_alloc,
+    F_xfer_free,
+    F_xfer_submit,
+    F_xfer_cancel,
+    F_xfer_pop,
+    F_get_next_timeout,
+    F_event_handler_active,
+    F_event_handling_ok,
+    F_try_lock_events,
+    F_lock_events,
+    F_unlock_events,
+    F_lock_event_waiters,
+    F_unlock_event_waiters,
+    F_wait_for_event,
+    F_handle_events_locked,
+    F_interrupt_event_handler,
     F_COUNT
 };
 

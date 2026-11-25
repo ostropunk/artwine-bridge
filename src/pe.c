@@ -4,6 +4,7 @@
 #include <winternl.h>
 #include <stdarg.h>
 #include <wchar.h>
+#include <stdlib.h>
 #include "common.h"
 
 typedef UINT64 unixlib_handle_t;
@@ -67,13 +68,11 @@ static struct {
 static CRITICAL_SECTION hp_cs;
 static DWORD hp_tls = TLS_OUT_OF_INDEXES;
 
-static void hotplug_drain(void)
+static void hotplug_drain_locked(void)
 {
     int slot, event;
     void *dev;
 
-    if (hp_tls == TLS_OUT_OF_INDEXES || TlsGetValue(hp_tls)) return; /* no re-entry */
-    TlsSetValue(hp_tls, (void *)1);
     while (CALL(F_hotplug_pop, A(&slot), A(&event), A(&dev)) == 1) {
         hotplug_cb cb = NULL;
         void *ctx = NULL, *user = NULL;
@@ -92,6 +91,78 @@ static void hotplug_drain(void)
         }
         CALL(F_unref_device, A(dev));
     }
+}
+
+/* ---- async transfers: the app sees a Windows-side transfer; a native twin does the I/O ---- */
+#define LIBUSB_TRANSFER_FREE_BUFFER (1U << 1)
+#define LIBUSB_TRANSFER_FREE_TRANSFER (1U << 2)
+#define LIBUSB_ERROR_INVALID_PARAM (-2)
+
+struct iso_desc { unsigned int length, actual_length; int status; };
+struct win_transfer;
+typedef void (WINAPI *transfer_cb)(struct win_transfer *);
+struct win_transfer {
+    void *dev_handle;
+    UINT8 flags;
+    unsigned char endpoint, type;
+    unsigned int timeout;
+    int status, length, actual_length;
+    transfer_cb callback;
+    void *user_data;
+    unsigned char *buffer;
+    int num_iso_packets;
+    struct iso_desc iso_packet_desc[];
+};
+/* Hidden header in front of every transfer we hand out. */
+struct xfer_priv { void *native; int iso; int pad; };
+#define PRIV(w) ((struct xfer_priv *)(w) - 1)
+
+EXPORT struct win_transfer *libusb_alloc_transfer(int iso_packets)
+{
+    struct xfer_priv *p;
+    if (iso_packets < 0) return NULL;
+    p = calloc(1, sizeof(*p) + sizeof(struct win_transfer) + (size_t)iso_packets * sizeof(struct iso_desc));
+    if (!p) return NULL;
+    p->iso = iso_packets;
+    p->native = (void *)(UINT_PTR)CALL(F_xfer_alloc, (UINT64)iso_packets);
+    if (!p->native) { free(p); return NULL; }
+    return (struct win_transfer *)(p + 1);
+}
+EXPORT void libusb_free_transfer(struct win_transfer *w)
+{
+    if (!w) return;
+    if (w->flags & LIBUSB_TRANSFER_FREE_BUFFER) free(w->buffer);
+    CALL(F_xfer_free, A(PRIV(w)->native));
+    free(PRIV(w));
+}
+EXPORT int libusb_submit_transfer(struct win_transfer *w)
+{
+    if (!w || w->num_iso_packets > PRIV(w)->iso) return LIBUSB_ERROR_INVALID_PARAM;
+    return (int)CALL(F_xfer_submit, A(PRIV(w)->native), A(w));
+}
+EXPORT int libusb_cancel_transfer(struct win_transfer *w)
+{
+    return (int)CALL(F_xfer_cancel, A(PRIV(w)->native));
+}
+
+static void transfer_drain(void)
+{
+    struct win_transfer *w;
+    while ((w = (struct win_transfer *)(UINT_PTR)CALL(F_xfer_pop, 0))) {
+        UINT8 flags = w->flags;
+        if (w->callback) w->callback(w);
+        /* the callback may have freed or resubmitted w; only touch it if asked to free */
+        if (flags & LIBUSB_TRANSFER_FREE_TRANSFER) libusb_free_transfer(w);
+    }
+}
+
+/* Run queued hotplug and transfer callbacks on the calling (app) thread. */
+static void drain_events(void)
+{
+    if (hp_tls == TLS_OUT_OF_INDEXES || TlsGetValue(hp_tls)) return; /* no re-entry */
+    TlsSetValue(hp_tls, (void *)1);
+    hotplug_drain_locked();
+    transfer_drain();
     TlsSetValue(hp_tls, NULL);
 }
 
@@ -197,14 +268,14 @@ EXPORT int libusb_handle_events_timeout(void *ctx, struct win_timeval *tv)
 {
     INT64 r = CALL(F_handle_events_timeout, A(ctx), (UINT64)(INT64)(tv ? tv->tv_sec : 0),
                    (UINT64)(INT64)(tv ? tv->tv_usec : 0));
-    hotplug_drain();
+    drain_events();
     return (int)r;
 }
 EXPORT int libusb_handle_events_timeout_completed(void *ctx, struct win_timeval *tv, int *completed)
 {
     INT64 r = CALL(F_handle_events_timeout_completed, A(ctx), (UINT64)(INT64)(tv ? tv->tv_sec : 0),
                    (UINT64)(INT64)(tv ? tv->tv_usec : 0), A(completed));
-    hotplug_drain();
+    drain_events();
     return (int)r;
 }
 EXPORT int libusb_handle_events(void *ctx)
@@ -241,7 +312,7 @@ EXPORT int libusb_hotplug_register_callback(void *ctx, int events, int flags, in
     LeaveCriticalSection(&hp_cs);
     if (r) return (int)r;
     if (handle) *handle = slot + 1;
-    hotplug_drain(); /* deliver LIBUSB_HOTPLUG_ENUMERATE arrivals now, like libusb does */
+    drain_events(); /* deliver LIBUSB_HOTPLUG_ENUMERATE arrivals now, like libusb does */
     return 0;
 }
 EXPORT void libusb_hotplug_deregister_callback(void *ctx, int handle)
@@ -289,3 +360,34 @@ EXPORT int libusb_get_max_alt_packet_size(void *dev, int iface, int alt, unsigne
 {
     return (int)CALL(F_get_max_alt_packet_size, A(dev), (UINT64)(INT64)iface, (UINT64)(INT64)alt, ep);
 }
+
+/* ---- event loop pieces for apps that run their own libusb event thread ---- */
+EXPORT int libusb_get_next_timeout(void *ctx, struct win_timeval *tv)
+{
+    LONG sec = 0, usec = 0;
+    int r = (int)CALL(F_get_next_timeout, A(ctx), A(&sec), A(&usec));
+    if (tv) { tv->tv_sec = sec; tv->tv_usec = usec; }
+    return r;
+}
+EXPORT int libusb_event_handler_active(void *ctx) { return (int)CALL(F_event_handler_active, A(ctx)); }
+EXPORT int libusb_event_handling_ok(void *ctx) { return (int)CALL(F_event_handling_ok, A(ctx)); }
+EXPORT int libusb_try_lock_events(void *ctx) { return (int)CALL(F_try_lock_events, A(ctx)); }
+EXPORT void libusb_lock_events(void *ctx) { CALL(F_lock_events, A(ctx)); }
+EXPORT void libusb_unlock_events(void *ctx) { CALL(F_unlock_events, A(ctx)); drain_events(); }
+EXPORT void libusb_lock_event_waiters(void *ctx) { CALL(F_lock_event_waiters, A(ctx)); }
+EXPORT void libusb_unlock_event_waiters(void *ctx) { CALL(F_unlock_event_waiters, A(ctx)); }
+EXPORT int libusb_wait_for_event(void *ctx, struct win_timeval *tv)
+{
+    int r = (int)CALL(F_wait_for_event, A(ctx), (UINT64)(INT64)(tv ? tv->tv_sec : 0),
+                      (UINT64)(INT64)(tv ? tv->tv_usec : 0), tv != NULL);
+    drain_events();
+    return r;
+}
+EXPORT int libusb_handle_events_locked(void *ctx, struct win_timeval *tv)
+{
+    /* Callbacks run after the events lock is released (in unlock_events), so an
+     * app callback that calls back into libusb can't deadlock on it. */
+    return (int)CALL(F_handle_events_locked, A(ctx), (UINT64)(INT64)(tv ? tv->tv_sec : 0),
+                     (UINT64)(INT64)(tv ? tv->tv_usec : 0));
+}
+EXPORT void libusb_interrupt_event_handler(void *ctx) { CALL(F_interrupt_event_handler, A(ctx)); }

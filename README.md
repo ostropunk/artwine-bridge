@@ -26,7 +26,7 @@ MiniFreak V.exe ──► libusb.dll (Artwine, Windows side)
 | MiniFreak V 5.1.1 standalone ↔ MiniFreak firmware 5.0 | **Sync works** |
 | Arturia Software Center 2.13 agent | Loads, sees devices |
 | MiniFreak V VST/VST3 through yabridge | Should work, not tested yet (see below) |
-| MIDI Control Center | Not yet: uses asynchronous transfers |
+| MIDI Control Center (BeatStep Pro and other controllers) | All its libusb calls are covered (async transfers tested); not tried with a controller yet |
 | Firmware update (DFU) | **Untested.** Don't flash firmware through the bridge yet |
 
 ## Requirements
