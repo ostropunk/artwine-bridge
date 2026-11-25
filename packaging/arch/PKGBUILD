@@ -1,0 +1,24 @@
+# Maintainer: ostropunk
+pkgname=artwine-bridge
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Let Windows music software in Wine (Arturia MiniFreak V and others) reach USB hardware through Linux libusb'
+arch=('x86_64')
+url='https://github.com/ostropunk/artwine-bridge'
+license=('LGPL-2.1-or-later')
+depends=('wine' 'libusb>=1.0.30' 'bash')
+makedepends=('git' 'mingw-w64-gcc' 'pkgconf')
+install=artwine-bridge.install
+source=("git+$url.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname"
+  make
+}
+
+package() {
+  cd "$pkgname"
+  make DESTDIR="$pkgdir" PREFIX=/usr install
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

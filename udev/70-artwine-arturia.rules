@@ -1,0 +1,4 @@
+# Artwine Bridge: let the logged-in user open Arturia USB devices through libusb,
+# so Arturia software running in Wine can sync with and update the hardware.
+# Other vendors: copy this line with their USB vendor ID (see `lsusb`).
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1c75", TAG+="uaccess"

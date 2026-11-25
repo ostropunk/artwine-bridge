@@ -1,0 +1,15 @@
+post_install() {
+  udevadm control --reload 2>/dev/null || true
+  echo ">> Replug your Arturia device, then run (as your user):"
+  echo ">>   artwine-bridge devices && artwine-bridge install"
+}
+
+post_upgrade() {
+  udevadm control --reload 2>/dev/null || true
+  echo ">> Run 'artwine-bridge install' to update bridged Wine prefixes."
+}
+
+pre_remove() {
+  echo ">> Before removing, run 'artwine-bridge uninstall' for each Wine prefix,"
+  echo ">> or bridged apps lose USB access."
+}

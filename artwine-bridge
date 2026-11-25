@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# Artwine Bridge: swap the libusb.dll that Windows apps ship for one that
+# forwards to Linux libusb, so they can reach USB hardware under Wine.
+set -euo pipefail
+
+VERSION=0.1.0
+ME=$(basename "$0")
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+
+usage() {
+    cat <<EOF
+$ME $VERSION — libusb for Windows apps under Wine
+
+usage: $ME [--prefix DIR] COMMAND
+
+commands:
+  status        list libusb.dll files in the prefix and whether they are bridged
+  install       bridge every 64-bit libusb-1.0 DLL in the prefix (originals kept as .orig)
+  uninstall     restore the original DLLs
+  check         list libusb functions apps use that the bridge does not export
+  auto on|off   reinstall automatically when an app update replaces a bridged DLL
+  devices       show USB devices from known vendors and whether you can open them
+
+options:
+  --prefix DIR  Wine prefix (default: \$WINEPREFIX or ~/.wine)
+  -q, --quiet   only print changes and errors
+
+Set ARTWINE_LOG=/path/to/file before starting an app to log its USB calls.
+EOF
+}
+
+PREFIX=${WINEPREFIX:-$HOME/.wine}
+QUIET=0
+while [ $# -gt 0 ]; do
+    case $1 in
+        --prefix) PREFIX=$2; shift 2 ;;
+        --prefix=*) PREFIX=${1#*=}; shift ;;
+        -q|--quiet) QUIET=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -V|--version) echo "$VERSION"; exit 0 ;;
+        *) break ;;
+    esac
+done
+CMD=${1:-status}; shift || true
+PREFIX=$(readlink -f "$PREFIX")
+DRIVE="$PREFIX/drive_c"
+
+say() { [ "$QUIET" = 1 ] || echo "$@"; }
+die() { echo "$ME: $*" >&2; exit 1; }
+
+# Where the built bridge lives: env override, a source checkout, or the package.
+libdir() {
+    local d
+    for d in "${ARTWINE_LIBDIR:-}" "$HERE/build" "$HERE/../lib/artwine-bridge" /usr/lib/artwine-bridge; do
+        [ -n "$d" ] && [ -f "$d/libusb.dll" ] && [ -f "$d/artwine.so" ] && { readlink -f "$d"; return; }
+    done
+    die "bridge files not found (run make, or set ARTWINE_LIBDIR)"
+}
+
+# PE machine type of a file: 8664 = x86_64, 14c = i386.
+pe_machine() {
+    local off
+    off=$(od -An -tu4 -j60 -N4 "$1" 2>/dev/null | tr -d ' ') || return 1
+    [ -n "$off" ] || return 1
+    od -An -tx2 -j$((off + 4)) -N2 "$1" 2>/dev/null | tr -d ' '
+}
+
+is_bridge() { strings -el "$1" 2>/dev/null | grep -q -E '^(artwine|libusb_wine)\.so$'; }
+is_libusb1() { grep -q -a -m1 libusb_init "$1" 2>/dev/null; }
+
+# Every 64-bit libusb-1.0 DLL in the prefix, NUL-separated.
+find_dlls() {
+    [ -d "$DRIVE" ] || die "no Wine prefix at $PREFIX"
+    find "$DRIVE" -xdev -iname libusb.dll -type f -print0 2>/dev/null |
+    while IFS= read -r -d '' f; do
+        [ "$(pe_machine "$f")" = 8664 ] && is_libusb1 "$f" && printf '%s\0' "$f"
+    done
+}
+
+short() { echo "${1#"$DRIVE"/}"; }
+
+cmd_status() {
+    local f n=0
+    while IFS= read -r -d '' f; do
+        n=$((n + 1))
+        if is_bridge "$f"; then
+            if [ -f "$(dirname "$f")/artwine.so" ]; then
+                if cmp -s "$f" "$(libdir)/libusb.dll" && cmp -s "$(dirname "$f")/artwine.so" "$(libdir)/artwine.so"; then
+                    echo "bridged    $(short "$f")"
+                else
+                    echo "outdated   $(short "$f")  (run: $ME install)"
+                fi
+            else
+                echo "broken     $(short "$f")  (artwine.so missing, run: $ME install)"
+            fi
+        else
+            echo "original   $(short "$f")"
+        fi
+    done < <(find_dlls)
+    [ $n -gt 0 ] || echo "no 64-bit libusb.dll found in $PREFIX"
+}
+
+cmd_install() {
+    local lib f d changed=0
+    lib=$(libdir)
+    while IFS= read -r -d '' f; do
+        d=$(dirname "$f")
+        if cmp -s "$f" "$lib/libusb.dll" && cmp -s "$d/artwine.so" "$lib/artwine.so"; then
+            say "up to date  $(short "$f")"
+            continue
+        fi
+        is_bridge "$f" || cp -p "$f" "$f.orig"
+        # Write to a temp name and rename, so running apps keep their mapped copy.
+        cp "$lib/libusb.dll" "$d/.libusb.dll.artwine" && mv -f "$d/.libusb.dll.artwine" "$f"
+        cp "$lib/artwine.so" "$d/.artwine.so.artwine" && mv -f "$d/.artwine.so.artwine" "$d/artwine.so"
+        echo "bridged     $(short "$f")"
+        changed=1
+    done < <(find_dlls)
+    [ $changed = 1 ] && say "restart the apps that use these DLLs"
+    return 0
+}
+
+cmd_uninstall() {
+    local f d
+    while IFS= read -r -d '' f; do
+        is_bridge "$f" || continue
+        d=$(dirname "$f")
+        if [ -f "$f.orig" ]; then
+            mv -f "$f.orig" "$f"
+            rm -f "$d/artwine.so"
+            echo "restored    $(short "$f")"
+        else
+            echo "no backup   $(short "$f")  (left bridged; reinstall the app to restore)"
+        fi
+    done < <(find_dlls)
+}
+
+# Functions apps look up by name vs. functions the bridge exports.
+cmd_check() {
+    local have wanted f missing any=0
+    have=$(strings -n 6 "$(libdir)/libusb.dll" | grep -x -E 'libusb_[a-z_0-9]+' | sort -u)
+    while IFS= read -r -d '' f; do
+        wanted=$(strings -n 6 "$f" | grep -x -E 'libusb_[a-z_0-9]+' | sort -u)
+        [ -n "$wanted" ] || continue
+        missing=$(comm -23 <(echo "$wanted") <(echo "$have"))
+        if [ -n "$missing" ]; then
+            any=1
+            echo "$(short "$f"):"
+            echo "$missing" | sed 's/^/  /'
+        else
+            say "ok          $(short "$f")"
+        fi
+    done < <(find "$DRIVE" -xdev -type f \( -iname '*.exe' -o -iname '*.dll' -o -iname '*.vst3' \) \
+                 ! -iname 'libusb*.dll' -size +64k -print0 2>/dev/null |
+             xargs -0 -r grep -l -a -Z libusb_init 2>/dev/null)
+    [ $any = 0 ] && say "every app's libusb calls are covered" || return 1
+}
+
+unit_name() { echo "artwine-bridge-$(echo -n "$PREFIX" | md5sum | cut -c1-8)"; }
+
+cmd_auto() {
+    local dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user" u f
+    u=$(unit_name)
+    case ${1:-} in
+        on)
+            local exe
+            exe=$(readlink -f "$0")
+            mkdir -p "$dir"
+            {
+                echo "[Unit]"
+                echo "Description=Artwine Bridge: re-bridge libusb.dll in $PREFIX after app updates"
+                echo
+                echo "[Path]"
+                while IFS= read -r -d '' f; do echo "PathChanged=$f"; done < <(find_dlls)
+                echo
+                echo "[Install]"
+                echo "WantedBy=default.target"
+            } > "$dir/$u.path"
+            cat > "$dir/$u.service" <<EOF
+[Unit]
+Description=Artwine Bridge: re-bridge libusb.dll in $PREFIX
+
+[Service]
+Type=oneshot
+ExecStart="$exe" --prefix "$PREFIX" --quiet install
+EOF
+            systemctl --user daemon-reload
+            systemctl --user enable --now "$u.path"
+            echo "auto reinstall on for $PREFIX ($u.path)"
+            ;;
+        off)
+            systemctl --user disable --now "$u.path" 2>/dev/null || true
+            rm -f "$dir/$u.path" "$dir/$u.service"
+            systemctl --user daemon-reload
+            echo "auto reinstall off for $PREFIX"
+            ;;
+        *) die "usage: $ME auto on|off" ;;
+    esac
+}
+
+cmd_devices() {
+    local d vid pid name node
+    for d in /sys/bus/usb/devices/*; do
+        [ -f "$d/idVendor" ] || continue
+        vid=$(cat "$d/idVendor"); pid=$(cat "$d/idProduct")
+        case $vid in 1c75) ;; *) continue ;; esac
+        name=$(cat "$d/product" 2>/dev/null || echo "?")
+        node=$(printf '/dev/bus/usb/%03d/%03d' "$(cat "$d/busnum")" "$(cat "$d/devnum")")
+        if [ -r "$node" ] && [ -w "$node" ]; then
+            echo "ok         $vid:$pid $name"
+        else
+            echo "no access  $vid:$pid $name  (install udev/70-artwine-arturia.rules, then replug)"
+        fi
+    done
+}
+
+case $CMD in
+    status) cmd_status ;;
+    install) cmd_install ;;
+    uninstall) cmd_uninstall ;;
+    check) cmd_check ;;
+    auto) cmd_auto "$@" ;;
+    devices) cmd_devices ;;
+    help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac
