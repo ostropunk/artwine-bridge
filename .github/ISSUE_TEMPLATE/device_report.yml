@@ -1,0 +1,53 @@
+name: Device report
+description: Tell us whether the bridge works with your Arturia hardware and software
+labels: [device report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports from other setups help most: other Arturia devices, other apps, other distributions and Wine versions. Failures are useful too.
+        Please don't test firmware updates through the bridge. They're untested and could damage the device.
+  - type: input
+    id: device
+    attributes:
+      label: Device and firmware
+      placeholder: MicroFreak, firmware 5.0
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: App and version
+      placeholder: MicroFreak V 3.0 standalone
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works (links and syncs)
+        - Partly works
+        - Doesn't work
+        - App crashes
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What you tried (link, preset transfer, sound bank sync…) and what happened.
+  - type: textarea
+    id: output
+    attributes:
+      label: Output of `artwine-bridge check` and `artwine-bridge devices`
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Distribution, Wine version and libusb version
+      placeholder: Arch, wine-staging 11.22, libusb 1.0.30
+    validations:
+      required: true

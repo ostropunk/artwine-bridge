@@ -1,0 +1,51 @@
+name: Bug report
+description: Something doesn't work, crashes or behaves oddly with the bridge installed
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please check that the problem goes away after `artwine-bridge uninstall`. If it doesn't, the bridge isn't the cause.
+        Logs can contain your serial numbers. Look them over before you paste them.
+  - type: input
+    id: app
+    attributes:
+      label: App and version
+      placeholder: MiniFreak V 5.1.1 standalone / VST3 in REAPER through vstbridge 0.0.5
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and firmware
+      placeholder: MiniFreak, firmware 5.0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `artwine-bridge status`, `artwine-bridge check` and `artwine-bridge devices`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: System
+      description: Distribution, `wine --version`, `pacman -Q libusb` (or your distro's equivalent), and how you installed Artwine Bridge.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: USB log (optional)
+      description: Start the app with `ARTWINE_LOG=/tmp/artwine.log`, reproduce the problem, and attach the file or paste the last part.
+      render: text
