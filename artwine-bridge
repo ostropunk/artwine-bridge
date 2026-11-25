@@ -140,6 +140,12 @@ cmd_check() {
     local have wanted f missing any=0
     have=$(strings -n 6 "$(libdir)/libusb.dll" | grep -x -E 'libusb_[a-z_0-9]+' | sort -u)
     while IFS= read -r -d '' f; do
+        # libusb compiled into the app (WinUSB/UsbDk backend inside) never loads libusb.dll
+        if grep -q -a -E 'libusbK DLL is not available|UsbDkHelper\.dll' "$f"; then
+            any=1
+            echo "static      $(short "$f")  (libusb built in; the bridge can't reach it)"
+            continue
+        fi
         wanted=$(strings -n 6 "$f" | grep -x -E 'libusb_[a-z_0-9]+' | sort -u)
         [ -n "$wanted" ] || continue
         missing=$(comm -23 <(echo "$wanted") <(echo "$have"))
